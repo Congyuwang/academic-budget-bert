@@ -26,6 +26,8 @@ class DeepspeedArguments:
 
     _argument_group_name = "Deepspeed Arguments"
 
+    tensorboard_log: Optional[str] = field(default=None, metadata={"help": "path to tensorboard log."})
+
     deepspeed: Optional[bool] = field(default=False, metadata={"help": "Use deepspeed."})
 
     deepspeed_transformer_kernel: Optional[bool] = field(

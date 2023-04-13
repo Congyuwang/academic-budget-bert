@@ -362,6 +362,15 @@ def create_ds_config(args):
         "wall_clock_breakdown": args.wall_clock_breakdown,
     }
 
+    if args.tensorboard_log:
+        ds_config.update({
+            "tensorboard": {
+                "enabled": True,
+                "output_path": args.tensorboard_log,
+                "job_name": "train_bert",
+            }
+        })
+
     if args.prescale_gradients:
         ds_config.update({"prescale_gradients": args.prescale_gradients})
 
