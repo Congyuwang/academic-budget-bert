@@ -77,9 +77,9 @@ if __name__ == "__main__":
     def create_shard(f_path, shard_idx, set_group, args):
         output_filename = os.path.join(new_shards_output, f"{set_group}_shard_{shard_idx}.hdf5")
         if "roberta" in args.model_name:
-            hdf5_preprocessing_cmd = "python data/create_pretraining_data_roberta.py"
+            hdf5_preprocessing_cmd = "python ../dataset/data/create_pretraining_data_roberta.py"
         else:
-            hdf5_preprocessing_cmd = "python data/create_pretraining_data.py"
+            hdf5_preprocessing_cmd = "python ../dataset/data/create_pretraining_data.py"
         hdf5_preprocessing_cmd += f" --input_file={f_path}"
         hdf5_preprocessing_cmd += f" --output_file={output_filename}"
         hdf5_preprocessing_cmd += (
