@@ -1,4 +1,5 @@
 *.pyc
 wikidata/*
 !wikidata/README.md
+vocab
 
