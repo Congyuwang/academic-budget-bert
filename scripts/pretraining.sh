@@ -21,10 +21,10 @@ deepspeed ../run_pretraining.py \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
     --adam_eps 1e-6 \
-    --total_training_time 24.0 \
-    --early_exit_time_marker 24.0 \
+    --total_training_time 57.6 \
+    --early_exit_time_marker 57.6 \
     --dataset_path $DATASET_PATH \
-    --num_workers 36\
+    --num_workers 24 \
     --output_dir /tmp/training-out \
     --print_steps 100 \
     --num_epochs_between_checkpoints 10000 \
