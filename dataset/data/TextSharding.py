@@ -75,7 +75,7 @@ class Sharding:
         ), "Please check that input files are present and contain data."
 
         # TODO: WIP: multiprocessing (create independent ranges and spawn processes)
-        use_multiprocessing = "serial"
+        use_multiprocessing = "queue"
 
         def chunks(data, n_processes=7):
             size = len(data)
@@ -96,7 +96,7 @@ class Sharding:
             manager = multiprocessing.Manager()
             return_dict = manager.dict()
             jobs = []
-            n_processes = 7  # in addition to the main process, total = n_proc+1
+            n_processes = 32
 
             def work(articles, return_dict):
                 sentences = {}
@@ -122,7 +122,7 @@ class Sharding:
                 proc.join()
 
         elif use_multiprocessing == "queue":
-            n_processes = 7
+            n_processes = 32
             work_queue = multiprocessing.Queue()
             jobs = []
 
@@ -211,7 +211,7 @@ class Sharding:
             len(self.articles) >= self.n_training_shards + self.n_test_shards
         ), "There are fewer articles than shards. Please add more data or reduce the number of shards requested."
 
-        articles = np.array(self.articles.keys(), dtype=np.int32)
+        articles = np.fromiter(self.articles.keys(), dtype=np.int32, count=len(self.articles))
         # shuffle articles to distribute them evenly over the shards
         np.random.shuffle(articles)
 
