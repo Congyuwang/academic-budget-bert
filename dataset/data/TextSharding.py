@@ -21,6 +21,7 @@ import numpy as np
 
 import multiprocessing
 import statistics
+from tqdm import tqdm
 
 
 class Sharding:
@@ -74,11 +75,11 @@ class Sharding:
         ), "Please check that input files are present and contain data."
 
         # TODO: WIP: multiprocessing (create independent ranges and spawn processes)
-        use_multiprocessing = "serial"
+        use_multiprocessing = "queue"
 
         def chunks(data, n_processes=7):
             size = len(data)
-            chunk_sz = int(size//n_processes) 
+            chunk_sz = int(size//n_processes)
             if size % n_processes != 0:
                 chunk_sz += 1
 
@@ -95,7 +96,7 @@ class Sharding:
             manager = multiprocessing.Manager()
             return_dict = manager.dict()
             jobs = []
-            n_processes = 7  # in addition to the main process, total = n_proc+1
+            n_processes = 16
 
             def work(articles, return_dict):
                 sentences = {}
@@ -121,7 +122,7 @@ class Sharding:
                 proc.join()
 
         elif use_multiprocessing == "queue":
-            n_processes = 7
+            n_processes = 16
             work_queue = multiprocessing.Queue()
             jobs = []
 
@@ -150,11 +151,11 @@ class Sharding:
                     if done_tasks == n_processes:
                         break
                 else:
-                    self.sentences[msg[1]] = msg[2] 
+                    self.sentences[msg[1]] = msg[2]
                     if n_sentences % 5000 == 0:
                         print("Segmenting article", n_sentences)
                     n_sentences += 1
-                    
+
             print("Joining Jobs")
             for proc in jobs:
                 proc.join()
@@ -210,169 +211,39 @@ class Sharding:
             len(self.articles) >= self.n_training_shards + self.n_test_shards
         ), "There are fewer articles than shards. Please add more data or reduce the number of shards requested."
 
-        # Create dictionary with - key: sentence count per article, value: article id number
-        sentence_counts = defaultdict(lambda: [])
+        articles = np.fromiter(self.articles.keys(), dtype=np.int32, count=len(self.articles))
+        # shuffle articles to distribute them evenly over the shards
+        np.random.shuffle(articles)
 
-        max_sentences = 0
-        total_sentences = 0
+        articles_per_test_shard = int(self.fraction_test_set * len(articles)) // self.n_test_shards
+        total_test_articles = articles_per_test_shard * self.n_test_shards
+        articles_per_training_shard = (len(articles) - total_test_articles) // self.n_training_shards
 
-        for article_id in self.sentences:
-            current_length = len(self.sentences[article_id])
-            sentence_counts[current_length].append(article_id)
-            max_sentences = max(max_sentences, current_length)
-            total_sentences += current_length
-
-        n_sentences_assigned_to_training = int((1 - self.fraction_test_set) * total_sentences)
-        nominal_sentences_per_training_shard = (
-            n_sentences_assigned_to_training // self.n_training_shards
-        )
-        nominal_sentences_per_test_shard = (
-            total_sentences - n_sentences_assigned_to_training
-        ) // self.n_test_shards
-
-        consumed_article_set = set({})
-        unused_article_set = set(self.articles.keys())
-
-        # Make first pass and add one article worth of lines per file
-        for file in self.output_training_files:
-            current_article_id = sentence_counts[max_sentences][-1]
-            sentence_counts[max_sentences].pop(-1)
-            self.output_training_files[file].append(current_article_id)
-            consumed_article_set.add(current_article_id)
-            unused_article_set.remove(current_article_id)
-
-            # Maintain the max sentence count
-            while len(sentence_counts[max_sentences]) == 0 and max_sentences > 0:
-                max_sentences -= 1
-
-            if len(self.sentences[current_article_id]) > nominal_sentences_per_training_shard:
-                nominal_sentences_per_training_shard = len(self.sentences[current_article_id])
-                print(
-                    "Warning: A single article contains more than the nominal number of sentences per training shard."
+        i = 0
+        for article_id in tqdm(articles):
+            if i < total_test_articles:
+                shard_id = i // articles_per_test_shard
+                if shard_id >= self.n_test_shards:
+                    continue
+                key = (
+                    self.output_name_prefix
+                    + self.output_test_identifier
+                    + str(shard_id)
+                    + self.output_file_extension
                 )
-
-        for file in self.output_test_files:
-            current_article_id = sentence_counts[max_sentences][-1]
-            sentence_counts[max_sentences].pop(-1)
-            self.output_test_files[file].append(current_article_id)
-            consumed_article_set.add(current_article_id)
-            unused_article_set.remove(current_article_id)
-
-            # Maintain the max sentence count
-            while len(sentence_counts[max_sentences]) == 0 and max_sentences > 0:
-                max_sentences -= 1
-
-            if len(self.sentences[current_article_id]) > nominal_sentences_per_test_shard:
-                nominal_sentences_per_test_shard = len(self.sentences[current_article_id])
-                print(
-                    "Warning: A single article contains more than the nominal number of sentences per test shard."
+                self.output_test_files[key].append(article_id)
+            else:
+                shard_id = (i - total_test_articles) // articles_per_training_shard
+                if shard_id >= self.n_training_shards:
+                    continue
+                key = (
+                    self.output_name_prefix
+                    + self.output_training_identifier
+                    + str(shard_id)
+                    + self.output_file_extension
                 )
-
-        training_counts = []
-        test_counts = []
-
-        for shard in self.output_training_files:
-            training_counts.append(self.get_sentences_per_shard(self.output_training_files[shard]))
-
-        for shard in self.output_test_files:
-            test_counts.append(self.get_sentences_per_shard(self.output_test_files[shard]))
-
-        training_median = statistics.median(training_counts)
-        test_median = statistics.median(test_counts)
-
-        # Make subsequent passes over files to find articles to add without going over limit
-        history_remaining = []
-        n_history_remaining = 4
-
-        while len(consumed_article_set) < len(self.articles):
-            for fidx, file in enumerate(self.output_training_files):
-                nominal_next_article_size = min(
-                    nominal_sentences_per_training_shard - training_counts[fidx], max_sentences
-                )
-
-                # Maintain the max sentence count
-                while len(sentence_counts[max_sentences]) == 0 and max_sentences > 0:
-                    max_sentences -= 1
-
-                while (
-                    len(sentence_counts[nominal_next_article_size]) == 0
-                    and nominal_next_article_size > 0
-                ):
-                    nominal_next_article_size -= 1
-
-                if (
-                    nominal_next_article_size not in sentence_counts
-                    or nominal_next_article_size is 0
-                    or training_counts[fidx] > training_median
-                ):
-                    continue  # skip adding to this file, will come back later if no file can accept unused articles
-
-                current_article_id = sentence_counts[nominal_next_article_size][-1]
-                sentence_counts[nominal_next_article_size].pop(-1)
-
-                self.output_training_files[file].append(current_article_id)
-                consumed_article_set.add(current_article_id)
-                unused_article_set.remove(current_article_id)
-
-            for fidx, file in enumerate(self.output_test_files):
-                nominal_next_article_size = min(
-                    nominal_sentences_per_test_shard - test_counts[fidx], max_sentences
-                )
-
-                # Maintain the max sentence count
-                while len(sentence_counts[max_sentences]) == 0 and max_sentences > 0:
-                    max_sentences -= 1
-
-                while (
-                    len(sentence_counts[nominal_next_article_size]) == 0
-                    and nominal_next_article_size > 0
-                ):
-                    nominal_next_article_size -= 1
-
-                if (
-                    nominal_next_article_size not in sentence_counts
-                    or nominal_next_article_size is 0
-                    or test_counts[fidx] > test_median
-                ):
-                    continue  # skip adding to this file, will come back later if no file can accept unused articles
-
-                current_article_id = sentence_counts[nominal_next_article_size][-1]
-                sentence_counts[nominal_next_article_size].pop(-1)
-
-                self.output_test_files[file].append(current_article_id)
-                consumed_article_set.add(current_article_id)
-                unused_article_set.remove(current_article_id)
-
-            # If unable to place articles a few times, bump up nominal sizes by fraction until articles get placed
-            if len(history_remaining) == n_history_remaining:
-                history_remaining.pop(0)
-            history_remaining.append(len(unused_article_set))
-
-            history_same = True
-            for i in range(1, len(history_remaining)):
-                history_same = history_same and (history_remaining[i - 1] == history_remaining[i])
-
-            if history_same:
-                nominal_sentences_per_training_shard += 1
-                # nominal_sentences_per_test_shard += 1
-
-            training_counts = []
-            test_counts = []
-            for shard in self.output_training_files:
-                training_counts.append(
-                    self.get_sentences_per_shard(self.output_training_files[shard])
-                )
-
-            for shard in self.output_test_files:
-                test_counts.append(self.get_sentences_per_shard(self.output_test_files[shard]))
-
-            training_median = statistics.median(training_counts)
-            test_median = statistics.median(test_counts)
-
-            print("Distributing data over shards:", len(unused_article_set), "articles remaining.")
-
-        if len(unused_article_set) != 0:
-            print("Warning: Some articles did not make it into output files.")
+                self.output_training_files[key].append(article_id)
+            i += 1
 
         for shard in self.output_training_files:
             print(
