@@ -96,7 +96,7 @@ class Sharding:
             manager = multiprocessing.Manager()
             return_dict = manager.dict()
             jobs = []
-            n_processes = 32
+            n_processes = 16
 
             def work(articles, return_dict):
                 sentences = {}
@@ -122,7 +122,7 @@ class Sharding:
                 proc.join()
 
         elif use_multiprocessing == "queue":
-            n_processes = 32
+            n_processes = 16
             work_queue = multiprocessing.Queue()
             jobs = []
 
@@ -222,11 +222,27 @@ class Sharding:
         i = 0
         for article_id in tqdm(articles):
             if i < total_test_articles:
-                self.output_test_files[i // articles_per_test_shard].append(article_id)
+                shard_id = i // articles_per_test_shard
+                if shard_id >= self.n_test_shards:
+                    continue
+                key = (
+                    self.output_name_prefix
+                    + self.output_test_identifier
+                    + str(shard_id)
+                    + self.output_file_extension
+                )
+                self.output_test_files[key].append(article_id)
             else:
-                self.output_training_files[
-                    (i - total_test_articles) // articles_per_training_shard
-                ].append(article_id)
+                shard_id = (i - total_test_articles) // articles_per_training_shard
+                if shard_id >= self.n_training_shards:
+                    continue
+                key = (
+                    self.output_name_prefix
+                    + self.output_training_identifier
+                    + str(shard_id)
+                    + self.output_file_extension
+                )
+                self.output_training_files[key].append(article_id)
             i += 1
 
         for shard in self.output_training_files:
